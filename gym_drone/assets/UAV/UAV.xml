@@ -91,13 +91,14 @@
   <!-- Sensor definitions for the IMU -->
   <sensor>
     <!-- Accelerometer with noise to simulate drift -->
-    <accelerometer name="imu_accel" site="imu" noise="0.01"/>
+    <accelerometer name="imu_accel" site="drone_imu" noise="0.01"/>
 
     <!-- Gyroscope with noise to simulate drift -->
-    <gyro name="imu_gyro" site="imu" noise="0.005"/>
+    <gyro name="imu_gyro" site="drone_imu" noise="0.005"/>
 
     <!-- Optional: Orientation sensor -->
     <framequat name="imu_orientation" objtype="body" objname="drone"/>
   </sensor>
+
 
 </mujoco>
