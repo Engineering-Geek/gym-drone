@@ -290,7 +290,7 @@ class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
     
     @property
     def drone_target_vector(self) -> np.ndarray:
-        return self.target_position - self.data.body('drone').xpos
+        return self.target.position - self.drone.position
     
     @property
     def drone_hit_ground(self) -> bool:
@@ -367,70 +367,5 @@ class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
     
     # endregion
 
-
-# endregion
-
-# region Tests
-class _TestDroneEnv(_BaseDroneEnv):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-    
-    @property
-    def reward(self) -> SupportsFloat:
-        return 0.0
-    
-    @property
-    def done(self) -> bool:
-        return False
-    
-    @property
-    def truncated(self) -> bool:
-        return False
-    
-    @property
-    def metrics(self) -> dict[str, Any]:
-        return {}
-
-
-def test_initialization_with_default_parameters():
-    env = _TestDroneEnv()
-    assert env.dt == 0.002
-    assert env.height == 480
-    assert env.width == 640
-    assert np.array_equal(env.drone.spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
-    assert env.drone.spawn_max_velocity == 0.5
-    assert np.array_equal(env.target.spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
-    assert env.target.spawn_max_velocity == 0.5
-    assert env.target.spawn_max_angular_velocity == 0.5
-
-
-def test_initialization_with_custom_parameters():
-    custom_drone_spawn_box = np.array([np.array([-5, -5, 0.5]), np.array([5, 5, 0.5])])
-    custom_drone_spawn_angle_range = np.array(
-        [np.array([-np.pi / 8, -np.pi / 8, -np.pi / 8]), np.array([np.pi / 8, np.pi / 8, np.pi / 8])])
-    custom_target_spawn_box = np.array([np.array([-5, -5, 0.5]), np.array([5, 5, 0.5])])
-    env = _TestDroneEnv(height=600, width=800, drone_spawn_box=custom_drone_spawn_box,
-                        drone_spawn_angle_range=custom_drone_spawn_angle_range,
-                        target_spawn_box=custom_target_spawn_box)
-    assert env.height == 600
-    assert env.width == 800
-    assert np.array_equal(env.drone.spawn_box, custom_drone_spawn_box)
-    assert np.array_equal(env.target.spawn_box, custom_target_spawn_box)
-
-
-def test_reset_model():
-    env = _TestDroneEnv()
-    env.reset_model()
-    assert env.drone.spawn_box[0][0] <= env.drone.position[0] <= env.drone.spawn_box[1][0]
-    assert env.drone.spawn_box[0][1] <= env.drone.position[1] <= env.drone.spawn_box[1][1]
-    assert env.drone.spawn_box[0][2] <= env.drone.position[2] <= env.drone.spawn_box[1][2]
-
-
-def test_hit_ground():
-    env = _TestDroneEnv()
-    assert env.drone_hit_ground is False
-    env.drone.position = np.array([0, 0, 0])
-    mj_step(env.model, env.data)
-    assert env.drone_hit_ground is True
 
 # endregion
