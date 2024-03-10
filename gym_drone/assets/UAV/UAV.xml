@@ -4,7 +4,7 @@
   <compiler inertiafromgeom="true" assetdir="assets"/>
 
   <!-- Simulation options including timestep, gravity, solver iterations, integration method, air density, and air viscosity -->
-  <option timestep="0.01" gravity="0 0 -9.81" iterations="50" integrator="Euler" density="1.225" viscosity="1.8e-5"/>
+  <option gravity="0 0 -9.81" iterations="50" integrator="Euler" density="1.225" viscosity="1.8e-5"/>
 
   <!-- Asset definitions for models components -->
   <asset>

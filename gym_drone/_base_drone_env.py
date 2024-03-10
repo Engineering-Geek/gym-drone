@@ -1,46 +1,99 @@
+# region Imports and global variables
+import os
+from abc import ABC, abstractmethod
 from typing import SupportsFloat, Any, Tuple
 
 import numpy as np
 from gymnasium.core import ActType, ObsType
 from gymnasium.envs.mujoco import MujocoEnv
-from gymnasium.spaces import Space, Box, Sequence, Dict
-from numpy.random import default_rng, Generator
-from mujoco import MjModel, MjData
+from gymnasium.spaces import Space, Box, Dict
+from gymnasium.utils import EzPickle
+from mujoco import MjModel, MjData, mj_step
+from numpy.random import default_rng
+
+XML_PATH = os.path.join(os.path.dirname(__file__), "assets/UAV/scene.xml")
 
 
-class CustomMujocoEnv(MujocoEnv):
+# endregion
 
-    def __init__(self, xml_path, sim_rate, dt, **kwargs):
-        height = kwargs.get('height', 480)
-        width = kwargs.get('width', 640)
+
+# region BaseMujocoEnv
+class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
+    """
+    CustomMujocoEnv is a custom environment that extends the
+    MujocoEnv. It is designed to simulate a drone in a 3D space
+    with a target. The drone's task is to reach the target.
+    """
+    
+    # region Initialization
+    def __init__(self, **kwargs):
+        """
+        Initialize the CustomMujocoEnv
+        :key xml_path: Path to the XML file that describes the
+        :key sim_rate: Simulation rate
+        :key dt: Simulation timestep
+        :key height: Height of the camera
+        :key width: Width of the camera
+        :key drone_spawn_box: Box in which the drone can spawn. First
+            numpy array is the lower bound and the second numpy array is
+            the upper bound.
+        :key drone_spawn_angle_range: Range of angles in which the drone
+            can spawn. First numpy array is the lower bound and the second
+            numpy array is the upper bound.
+        :key drone_spawn_max_velocity: Maximum velocity at which the drone
+            can spawn.
+        :key drone_spawn_max_angular_velocity: Maximum angular velocity at
+            which the drone can spawn.
+        :key target_spawn_box: Box in which the target can spawn. First
+            numpy array is the lower bound and the second numpy array is
+            the upper bound.
+        """
+        # region Initialize MujocoEnv
         self.metadata = {
             "render_modes": [
                 "human",
                 "rgb_array",
                 "depth_array",
             ],
-            "render_fps": int(np.round(1.0 / dt)),
+            "render_fps": 500,
+            # render_fps will be set to dt^-1 after the model loads
         }
-
+        height = kwargs.get('height', 480)
+        width = kwargs.get('width', 640)
         observation_space: Space[ObsType] = Dict({
-            "drone_position": Box(low=-np.inf, high=np.inf, shape=(3,)),
-            "drone_velocity": Box(low=-np.inf, high=np.inf, shape=(3,)),
-            "drone_orientation": Box(low=-np.inf, high=np.inf, shape=(4,)),
-            "drone_angular_velocity": Box(low=-np.inf, high=np.inf, shape=(3,)),
-            "target_vector": Box(low=-np.inf, high=np.inf, shape=(3,)),
-            "image_0": Box(low=0, high=255, shape=(height, width, 3), dtype=np.uint8),
-            "image_1": Box(low=0, high=255, shape=(height, width, 3), dtype=np.uint8),
+            "drone_velocity":
+                Box(low=-np.inf, high=np.inf, shape=(3,)),
+            "drone_orientation":
+                Box(low=-np.inf, high=np.inf, shape=(4,)),
+            "drone_angular_velocity":
+                Box(low=-np.inf, high=np.inf, shape=(3,)),
+            "image_0":
+                Box(low=0, high=255, shape=(height, width, 3), dtype=np.uint8),
+            "image_1":
+                Box(low=0, high=255, shape=(height, width, 3), dtype=np.uint8),
         })
-
+        
         MujocoEnv.__init__(
             self,
-            model_path=xml_path,
-            frame_skip=sim_rate,
+            model_path=XML_PATH,
+            frame_skip=kwargs.get('frame_skip', 1),
             observation_space=observation_space,
-            width=width,
             height=height,
+            width=width,
+        )
+        EzPickle.__init__(
+            self,
+            XML_PATH,
+            kwargs.get('frame_skip', 1),
+            kwargs.get('dt', self.dt),
             **kwargs,
         )
+        # Set action space
+        self.action_space: Space = (
+            Box(low=-1.0, high=1.0, shape=(self.model.nu,)))
+        
+        # Set simulation timestep
+        self.model.opt.timestep = kwargs.get('dt', self.dt)
         self.metadata = {
             "render_modes": [
                 "human",
@@ -49,69 +102,225 @@ class CustomMujocoEnv(MujocoEnv):
             ],
             "render_fps": int(np.round(1.0 / self.dt)),
         }
+        # endregion
+        
+        # region Initialize Random Number Generator and Model/Data
+        # Initialize random number generator
         self.rng = default_rng()
-        self.model: MjModel  # Declare the model attribute
-        self.data: MjData  # Declare the data attribute
-        print(self.mujoco_renderer.viewer)
-        # Drone
-        self.drone_spawn_x_range = kwargs.get('drone_spawn_x_range', (-10.0, 10.0))
-        self.drone_spawn_y_range = kwargs.get('drone_spawn_y_range', (-10.0, 10.0))
-        self.drone_spawn_z_range = kwargs.get('drone_spawn_z_range', (0.5, 3.0))
-        self.drone_spawn_roll_range = kwargs.get('drone_spawn_roll_range', (-np.pi / 6, np.pi / 6))
-        self.drone_spawn_pitch_range = kwargs.get('drone_spawn_pitch_range', (-np.pi / 6, np.pi / 6))
-        self.drone_spawn_yaw_range = kwargs.get('drone_spawn_yaw_range', (-np.pi, np.pi))
-        self.drone_spawn_max_velocity = kwargs.get('drone_spawn_max_velocity', 0.5)
-        self.drone_spawn_max_angular_velocity = kwargs.get('drone_spawn_max_angular_velocity', 0.5)
-        self.action_space: Space = Box(low=-1.0, high=1.0, shape=(self.model.nu,))
-
-    def step(
-            self, action: ActType
-    ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
-        self.pre_simulation()
-        self.do_simulation(action, self.frame_skip)
-        return self.observation, self.reward, self.truncated, self.done, self.metrics
-
+        
+        # Initialize model and data attributes
+        self.model: MjModel = self.model
+        self.data: MjData = self.data
+        # endregion
+        
+        # region Drone Parameters
+        self.drone_spawn_box = (
+            kwargs.get('drone_spawn_box',
+                       np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])])))
+        self.drone_spawn_angle_range = (
+            kwargs.get('drone_spawn_angle_range',
+                       np.array([
+                           np.array([-np.pi / 4, -np.pi / 4, -np.pi / 4]),
+                           np.array([np.pi / 4, np.pi / 4, np.pi / 4])])))
+        self.drone_spawn_max_velocity = (
+            kwargs.get('drone_spawn_max_velocity', 0.5))
+        self.drone_spawn_max_angular_velocity = (
+            kwargs.get('drone_spawn_max_angular_velocity', 0.5))
+        # endregion
+        
+        # region Target Parameters
+        self.target_spawn_box = (
+            kwargs.get('target_spawn_box',
+                       np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])])))
+        self.target_spawn_max_velocity = (
+            kwargs.get('target_spawn_max_velocity', 0.5))
+        self.target_spawn_max_angular_velocity = (
+            kwargs.get('target_spawn_max_angular_velocity', 0.5))
+        self.target_initial_position: np.ndarray = np.array([0., 0., 0.])
+        self.target_initial_orientation: np.ndarray = np.array([0., 0., 0.])
+        # endregion
+    
+    # endregion
+    
+    # region Properties
+    @property
+    def drone_accel(self) -> np.ndarray:
+        return self.data.sensor('imu_accel').data
+    
+    @property
+    def drone_gyro(self) -> np.ndarray:
+        return self.data.sensor('imu_gyro').data
+    
+    @property
+    def drone_orientation(self) -> np.ndarray:
+        return self.data.sensor('imu_orientation').data
+    
+    @property
+    def camera_0(self) -> np.ndarray:
+        return self.mujoco_renderer.render('rgb_array', 0)
+    
+    @property
+    def camera_1(self) -> np.ndarray:
+        return self.mujoco_renderer.render('rgb_array', 1)
+    
+    @property
+    def target_position(self) -> np.ndarray:
+        return self.data.body('target').xpos
+    
+    @property
+    def target_velocity(self) -> np.ndarray:
+        return self.data.body('target').cvel[:3]
+    
+    @property
+    def drone_target_vector(self) -> np.ndarray:
+        return self.target_position - self.data.body('drone').xpos
+    
+    @property
+    def drone_hit_ground(self) -> bool:
+        drone_id = self.model.geom('drone').id
+        floor_id = self.model.geom('floor').id
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            if (contact.geom1 == drone_id and contact.geom2 == floor_id) or (
+                    contact.geom1 == floor_id and contact.geom2 == drone_id):
+                return True
+        return False
+    
+    # endregion
+    
+    # region Methods
+    def place_target(self,
+                     target_pos: np.ndarray,
+                     target_orientation: np.ndarray) -> None:
+        self.data.body('target').qpos[:3] = target_pos
+        self.data.body('target').qpos[3:] = target_orientation
+    
+    def move_target(self, target_pos: np.ndarray) -> None:
+        self.data.body('target').xpos = target_pos
+    
     def pre_simulation(self) -> None:
         pass
-
+    
+    def reset_model(self):
+        self.data.body('drone').xpos = self.rng.uniform(
+            self.drone_spawn_box[0], self.drone_spawn_box[1]
+        )
+    
+    # endregion
+    
+    # region Step Logic
+    def step(
+            self, action: ActType
+    ) -> Tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+        self.pre_simulation()
+        self.do_simulation(action, self.frame_skip)
+        return (self.observation, self.reward,
+                self.truncated, self.done, self.metrics)
+    
     @property
     def observation(self) -> ObsType:
-        # Implement your observation logic here
-        return np.concatenate([
-            self.data.qpos.flat,  # Joint positions
-            self.data.qvel.flat,  # Joint velocities
-        ])
-
+        drone_imu = self.data.sensordata
+        return {
+            "drone_position": self.data.qpos[0:3],
+            "drone_velocity": self.data.qvel[0:3],
+            "drone_orientation": self.data.qpos[3:7],
+            "drone_angular_velocity": self.data.qvel[3:6],
+            "image_0": self.mujoco_renderer.render('rgb_array', 0),
+            "image_1": self.mujoco_renderer.render('rgb_array', 1),
+        }
+    
     @property
+    @abstractmethod
     def reward(self) -> SupportsFloat:
         raise NotImplementedError
-
+    
     @property
+    @abstractmethod
     def done(self) -> bool:
         raise NotImplementedError
-
+    
     @property
+    @abstractmethod
     def truncated(self) -> bool:
         raise NotImplementedError
-
+    
     @property
+    @abstractmethod
     def metrics(self) -> dict[str, Any]:
         raise NotImplementedError
-
-    def reset_model(self):
-        # Required by MujocoEnv, called by reset()
-        qpos = self.init_qpos + self.rng.uniform(size=self.model.nq, low=-.1, high=.1)
-        qvel = self.init_qvel + self.rng.random(self.model.nv) * .1
-        self.set_state(qpos, qvel)
-        return self.observation()
-
-    def viewer_setup(self):
-        # Adjust the camera settings if needed
-        self.render()
-
-    def get_camera_images(self) -> Tuple[np.ndarray, np.ndarray]:
-        pass
+    
+    # endregion
 
 
-if __name__ == "__main__":
-    env = CustomMujocoEnv(xml_path="/home/nmelgiri/PycharmProjects/gym-drone/gym_drone/assets/UAV/scene.xml", sim_rate=1, dt=0.01)
+# endregion
+
+# region Tests
+class _TestDroneEnv(_BaseDroneEnv):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    @property
+    def reward(self) -> SupportsFloat:
+        return 0.0
+    
+    @property
+    def done(self) -> bool:
+        return False
+    
+    @property
+    def truncated(self) -> bool:
+        return False
+    
+    @property
+    def metrics(self) -> dict[str, Any]:
+        return {}
+
+
+def test_initialization_with_default_parameters():
+    import os
+    print(os.getcwd())
+    env = _TestDroneEnv()
+    assert env.dt == 0.002
+    assert env.height == 480
+    assert env.width == 640
+    assert np.array_equal(env.drone_spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
+    assert np.array_equal(env.drone_spawn_angle_range, np.array(
+        [np.array([-np.pi / 4, -np.pi / 4, -np.pi / 4]), np.array([np.pi / 4, np.pi / 4, np.pi / 4])]))
+    assert env.drone_spawn_max_velocity == 0.5
+    assert env.drone_spawn_max_angular_velocity == 0.5
+    assert np.array_equal(env.target_spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
+    assert env.target_spawn_max_velocity == 0.5
+    assert env.target_spawn_max_angular_velocity == 0.5
+
+
+def test_initialization_with_custom_parameters():
+    custom_drone_spawn_box = np.array([np.array([-5, -5, 0.5]), np.array([5, 5, 0.5])])
+    custom_drone_spawn_angle_range = np.array(
+        [np.array([-np.pi / 8, -np.pi / 8, -np.pi / 8]), np.array([np.pi / 8, np.pi / 8, np.pi / 8])])
+    custom_target_spawn_box = np.array([np.array([-5, -5, 0.5]), np.array([5, 5, 0.5])])
+    env = _TestDroneEnv(height=600, width=800, drone_spawn_box=custom_drone_spawn_box,
+                        drone_spawn_angle_range=custom_drone_spawn_angle_range,
+                        target_spawn_box=custom_target_spawn_box)
+    assert env.height == 600
+    assert env.width == 800
+    assert np.array_equal(env.drone_spawn_box, custom_drone_spawn_box)
+    assert np.array_equal(env.drone_spawn_angle_range, custom_drone_spawn_angle_range)
+    assert np.array_equal(env.target_spawn_box, custom_target_spawn_box)
+
+
+def test_reset_model():
+    env = _TestDroneEnv()
+    env.reset_model()
+    assert env.drone_spawn_box[0][0] <= env.data.body('drone').xpos[0] <= env.drone_spawn_box[1][0]
+    assert env.drone_spawn_box[0][1] <= env.data.body('drone').xpos[1] <= env.drone_spawn_box[1][1]
+    assert env.drone_spawn_box[0][2] <= env.data.body('drone').xpos[2] <= env.drone_spawn_box[1][2]
+    
+
+def test_hit_ground():
+    env = _TestDroneEnv()
+    assert env.drone_hit_ground is False
+    env.data.body('drone').xpos = np.array([0, 0, 0])
+    mj_step(env.model, env.data)
+    assert env.drone_hit_ground is True
+
+# endregion
