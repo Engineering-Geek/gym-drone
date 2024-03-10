@@ -9,12 +9,135 @@ from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.spaces import Space, Box, Dict
 from gymnasium.utils import EzPickle
 from mujoco import MjModel, MjData, mj_step
+from mujoco._structs import _MjDataBodyViews
+import quaternion
 from numpy.random import default_rng
 
 XML_PATH = os.path.join(os.path.dirname(__file__), "assets/UAV/scene.xml")
 
 
 # endregion
+
+
+class Drone:
+    def __init__(self,
+                 data: MjData,
+                 spawn_box: np.ndarray,
+                 spawn_max_velocity: float,
+                 rng: np.random.Generator = default_rng()
+                 ):
+        """
+        Initialize the Drone object
+        :param data:
+        :param spawn_box:
+        :param spawn_max_velocity:
+        """
+        self.data = data
+        self.body: _MjDataBodyViews = data.body('drone')
+        self.spawn_box = spawn_box
+        self.spawn_max_velocity = spawn_max_velocity
+        self.rng = rng
+        self.id = self.body.id
+        
+    @property
+    def position(self) -> np.ndarray:
+        return self.body.xpos
+    
+    @position.setter
+    def position(self, value: np.ndarray) -> None:
+        self.body.xpos = value
+    
+    @property
+    def velocity(self) -> np.ndarray:
+        return self.body.cvel[:3]
+    
+    @velocity.setter
+    def velocity(self, value: np.ndarray) -> None:
+        self.body.cvel[:3] = value
+    
+    @property
+    def angular_velocity(self) -> np.ndarray:
+        return self.body.qvel[3:6]
+    
+    @angular_velocity.setter
+    def angular_velocity(self, value: np.ndarray) -> None:
+        self.body.qvel[3:6] = value
+    
+    @property
+    def imu_accel(self) -> np.ndarray:
+        return self.data.sensor('imu_accel').data
+    
+    @property
+    def imu_gyro(self) -> np.ndarray:
+        return self.data.sensor('imu_gyro').data
+    
+    @property
+    def imu_orientation(self) -> np.ndarray:
+        return self.data.sensor('imu_orientation').data
+    
+    def reset(self):
+        """
+        Reset the drone's position, orientation, velocity, and angular velocity
+        :return:
+        """
+        self.position = self.spawn_box[0] + (self.spawn_box[1] - self.spawn_box[0]) * self.rng.random(3)
+        self.velocity = self.spawn_max_velocity * self.rng.random(3)
+
+
+class Target:
+    def __init__(self,
+                 data: MjData,
+                 spawn_box: np.ndarray,
+                 spawn_max_velocity: float,
+                 spawn_max_angular_velocity: float,
+                 rng: np.random.Generator = default_rng()
+                 ):
+        """
+        Initialize the Target object
+        :param data:
+        :param spawn_box:
+        :param spawn_max_velocity:
+        :param spawn_max_angular_velocity:
+        """
+        self.data = data
+        self.body: _MjDataBodyViews = data.body('target')
+        self.spawn_box = spawn_box
+        self.spawn_max_velocity = spawn_max_velocity
+        self.spawn_max_angular_velocity = spawn_max_angular_velocity
+        self.rng = rng
+        self.id = self.body.id
+    
+    @property
+    def position(self) -> np.ndarray:
+        return self.body.xpos
+    
+    @position.setter
+    def position(self, value: np.ndarray) -> None:
+        self.body.xpos = value
+    
+    @property
+    def velocity(self) -> np.ndarray:
+        return self.body.cvel[:3]
+    
+    @velocity.setter
+    def velocity(self, value: np.ndarray) -> None:
+        self.body.cvel[:3] = value
+    
+    @property
+    def orientation(self) -> np.ndarray:
+        return self.body.qpos[3:7]
+    
+    @orientation.setter
+    def orientation(self, value: np.ndarray) -> None:
+        self.body.qpos[3:7] = value
+    
+    def reset(self):
+        """
+        Reset the target's position, orientation, velocity, and angular velocity
+        :return:
+        """
+        self.position = self.spawn_box[0] + (self.spawn_box[1] - self.spawn_box[0]) * self.rng.random(3)
+        self.velocity = self.spawn_max_velocity * self.rng.random(3)
 
 
 # region BaseMujocoEnv
@@ -61,11 +184,11 @@ class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
         height = kwargs.get('height', 480)
         width = kwargs.get('width', 640)
         observation_space: Space[ObsType] = Dict({
-            "drone_velocity":
+            "imu_accel":
                 Box(low=-np.inf, high=np.inf, shape=(3,)),
-            "drone_orientation":
+            "imu_gyro":
                 Box(low=-np.inf, high=np.inf, shape=(4,)),
-            "drone_angular_velocity":
+            "imu_orientation":
                 Box(low=-np.inf, high=np.inf, shape=(3,)),
             "image_0":
                 Box(low=0, high=255, shape=(height, width, 3), dtype=np.uint8),
@@ -114,30 +237,24 @@ class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
         # endregion
         
         # region Drone Parameters
-        self.drone_spawn_box = (
-            kwargs.get('drone_spawn_box',
-                       np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])])))
-        self.drone_spawn_angle_range = (
-            kwargs.get('drone_spawn_angle_range',
-                       np.array([
-                           np.array([-np.pi / 4, -np.pi / 4, -np.pi / 4]),
-                           np.array([np.pi / 4, np.pi / 4, np.pi / 4])])))
-        self.drone_spawn_max_velocity = (
-            kwargs.get('drone_spawn_max_velocity', 0.5))
-        self.drone_spawn_max_angular_velocity = (
-            kwargs.get('drone_spawn_max_angular_velocity', 0.5))
+        self.drone = Drone(
+            data=self.data,
+            spawn_box=kwargs.get('drone_spawn_box',
+                                 np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])])),
+            spawn_max_velocity=kwargs.get('drone_spawn_max_velocity', 0.5),
+            rng=self.rng
+        )
         # endregion
         
         # region Target Parameters
-        self.target_spawn_box = (
-            kwargs.get('target_spawn_box',
-                       np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])])))
-        self.target_spawn_max_velocity = (
-            kwargs.get('target_spawn_max_velocity', 0.5))
-        self.target_spawn_max_angular_velocity = (
-            kwargs.get('target_spawn_max_angular_velocity', 0.5))
-        self.target_initial_position: np.ndarray = np.array([0., 0., 0.])
-        self.target_initial_orientation: np.ndarray = np.array([0., 0., 0.])
+        self.target = Target(
+            data=self.data,
+            spawn_box=kwargs.get('target_spawn_box',
+                                 np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])])),
+            spawn_max_velocity=kwargs.get('target_spawn_max_velocity', 0.5),
+            spawn_max_angular_velocity=kwargs.get('target_spawn_max_angular_velocity', 0.5),
+            rng=self.rng
+        )
         # endregion
     
     # endregion
@@ -201,10 +318,10 @@ class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
     def pre_simulation(self) -> None:
         pass
     
-    def reset_model(self):
-        self.data.body('drone').xpos = self.rng.uniform(
-            self.drone_spawn_box[0], self.drone_spawn_box[1]
-        )
+    def reset_model(self) -> ObsType:
+        self.drone.reset()
+        self.target.reset()
+        return self.observation
     
     # endregion
     
@@ -219,7 +336,6 @@ class _BaseDroneEnv(MujocoEnv, EzPickle, ABC):
     
     @property
     def observation(self) -> ObsType:
-        drone_imu = self.data.sensordata
         return {
             "drone_position": self.data.qpos[0:3],
             "drone_velocity": self.data.qvel[0:3],
@@ -277,20 +393,15 @@ class _TestDroneEnv(_BaseDroneEnv):
 
 
 def test_initialization_with_default_parameters():
-    import os
-    print(os.getcwd())
     env = _TestDroneEnv()
     assert env.dt == 0.002
     assert env.height == 480
     assert env.width == 640
-    assert np.array_equal(env.drone_spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
-    assert np.array_equal(env.drone_spawn_angle_range, np.array(
-        [np.array([-np.pi / 4, -np.pi / 4, -np.pi / 4]), np.array([np.pi / 4, np.pi / 4, np.pi / 4])]))
-    assert env.drone_spawn_max_velocity == 0.5
-    assert env.drone_spawn_max_angular_velocity == 0.5
-    assert np.array_equal(env.target_spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
-    assert env.target_spawn_max_velocity == 0.5
-    assert env.target_spawn_max_angular_velocity == 0.5
+    assert np.array_equal(env.drone.spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
+    assert env.drone.spawn_max_velocity == 0.5
+    assert np.array_equal(env.target.spawn_box, np.array([np.array([-10, -10, 0.5]), np.array([10, 10, 0.5])]))
+    assert env.target.spawn_max_velocity == 0.5
+    assert env.target.spawn_max_angular_velocity == 0.5
 
 
 def test_initialization_with_custom_parameters():
@@ -303,23 +414,22 @@ def test_initialization_with_custom_parameters():
                         target_spawn_box=custom_target_spawn_box)
     assert env.height == 600
     assert env.width == 800
-    assert np.array_equal(env.drone_spawn_box, custom_drone_spawn_box)
-    assert np.array_equal(env.drone_spawn_angle_range, custom_drone_spawn_angle_range)
-    assert np.array_equal(env.target_spawn_box, custom_target_spawn_box)
+    assert np.array_equal(env.drone.spawn_box, custom_drone_spawn_box)
+    assert np.array_equal(env.target.spawn_box, custom_target_spawn_box)
 
 
 def test_reset_model():
     env = _TestDroneEnv()
     env.reset_model()
-    assert env.drone_spawn_box[0][0] <= env.data.body('drone').xpos[0] <= env.drone_spawn_box[1][0]
-    assert env.drone_spawn_box[0][1] <= env.data.body('drone').xpos[1] <= env.drone_spawn_box[1][1]
-    assert env.drone_spawn_box[0][2] <= env.data.body('drone').xpos[2] <= env.drone_spawn_box[1][2]
-    
+    assert env.drone.spawn_box[0][0] <= env.drone.position[0] <= env.drone.spawn_box[1][0]
+    assert env.drone.spawn_box[0][1] <= env.drone.position[1] <= env.drone.spawn_box[1][1]
+    assert env.drone.spawn_box[0][2] <= env.drone.position[2] <= env.drone.spawn_box[1][2]
+
 
 def test_hit_ground():
     env = _TestDroneEnv()
     assert env.drone_hit_ground is False
-    env.data.body('drone').xpos = np.array([0, 0, 0])
+    env.drone.position = np.array([0, 0, 0])
     mj_step(env.model, env.data)
     assert env.drone_hit_ground is True
 
