@@ -1,0 +1,5 @@
+<mujoco model="drone_target">
+    <worldbody>
+        <geom name="target_{{index}}" size="{{l}} {{w}} {{h}}" type="box" rgba="0.5 0.5 0.5 0.5" pos="{{x}} {{y}} {{z}}"/>
+    </worldbody>
+</mujoco>
