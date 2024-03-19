@@ -12,5 +12,5 @@ def urdf2xml(urdf_file: Union[Path, str], xml_file: Union[Path, str]):
 if __name__ == '__main__':
     import os
     os.chdir(os.path.dirname(__file__))
-    urdf2xml("../gym_drone/assets/assets/robot.urdf", "../gym_drone/assets/drone.xml")
+    urdf2xml("../assets/assets/robot.urdf", "../gym_drone/assets/drone.xml")
 

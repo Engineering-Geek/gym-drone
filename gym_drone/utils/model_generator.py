@@ -32,7 +32,7 @@ def read_template_files() -> tuple:
     Returns:
         tuple: Containing the content of scene.xml, drone.xml, and target.xml respectively.
     """
-    base_path = "../gym_drone/assets"
+    base_path = "../assets"
     with open(f"{base_path}/scene.xml") as f:
         scene_xml = f.read()
     with open(f"{base_path}/drone.xml") as f:
@@ -169,7 +169,7 @@ def get_model(num_agents: int, num_targets: int, light_height: float, spacing: f
     os.chdir(os.path.dirname(__file__))
     scene_xml, drone_xml, target_xml = read_template_files()
     
-    save_dir = "../gym_drone/assets/generated"
+    save_dir = "../assets/generated"
     
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)

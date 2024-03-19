@@ -1,5 +1,5 @@
-from mujoco import MjModel, MjData, viewer
-from utils.model_generator import get_model
+from mujoco import viewer
+from gym_drone.utils.model_generator import get_model
 import numpy as np
 
 

@@ -34,19 +34,20 @@ drones interact within a shared environment, targeting objectives or engaging in
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Set, Tuple, Type
+from typing import Set, Tuple, Type, Union, Optional
 
 import numpy as np
 import quaternion
+from scipy.spatial.transform import Rotation as R
 from gymnasium import Space
-from gymnasium.core import ObsType, ActType
+from gymnasium.core import ObsType, ActType, Env
 from gymnasium.spaces import Dict as SpaceDict
-from mujoco import MjModel, MjData, Renderer, mj_step, mj_name2id, mjtObj
-from mujoco._structs import _MjModelGeomViews
+from mujoco import MjModel, MjData, Renderer, mj_step, mj_name2id, mjtObj, viewer, mj_resetData, mj_multiRay, mjMAXVAL
+from mujoco._structs import _MjModelGeomViews, _MjModelSensorViews
 from ray.rllib.env.multi_agent_env import MultiAgentEnv, AgentID
 from ray.rllib.utils.typing import EnvObsType, EnvActionType, MultiEnvDict, MultiAgentDict
 
-from utils.model_generator import get_model
+from gym_drone.utils.model_generator import get_model
 
 
 class Bullet:
@@ -79,6 +80,7 @@ class Bullet:
         reset(self):
             Resets the bullet's state within the simulation.
     """
+    
     def __init__(self, agent_id: AgentID, model: MjModel, data: MjData, bullet_id: int, bullet_velocity: float,
                  parent: Drone, **kwargs):
         """
@@ -113,7 +115,7 @@ class Bullet:
         self.qvel_offset = self.joint_id * 6
         
         # Set initial color (if color doesn't need to change dynamically)
-        self.data.geom_rgba[self.geom_id] = self.bullet_color
+        self.model.geom_rgba[self.geom_id] = self.bullet_color
     
     def shoot(self):
         """
@@ -153,7 +155,7 @@ class Target:
         reset(self):
             Resets the target's position and orientation within the simulation.
     """
-
+    
     def __init__(self, model: MjModel, data: MjData, target_id: int, spawn_box: np.ndarray,
                  spawn_angles: np.ndarray, target_color: np.ndarray = np.array([0, 1, 0, 1])):
         """
@@ -172,12 +174,12 @@ class Target:
         self.target_id = target_id
         self.spawn_box = spawn_box
         self.spawn_angles = spawn_angles
-
+        
         target_name = f"target_{target_id}"
         self.geom_id = mj_name2id(model, mjtObj.mjOBJ_GEOM, target_name)
-
-        self.data.geom_rgba[self.geom_id] = target_color
-
+        
+        self.model.geom_rgba[self.geom_id] = target_color
+    
     def reset(self):
         """
         Resets the target's position and orientation within the simulation based on the spawn box and angles.
@@ -190,6 +192,14 @@ class Target:
 class Drone:
     """
     Represents a drone in the MuJoCo simulation environment, encapsulating its properties, sensors, and actions.
+    
+    Default Flags:
+        - hit_floor: Indicates if the drone has hit the floor.
+        - got_shot: Indicates if the drone has been hit by a bullet.
+        - shot_target: Indicates if the drone has hit a target.
+        - shot_drone: Indicates if the drone has shot another drone.
+        - out_of_bounds: Indicates if the drone has gone out of bounds.
+        - crash_target: Indicates if the drone has crashed into a target.
     
     Abstract Methods:
         - observation_space: Defines the observation space of the drone.
@@ -211,9 +221,13 @@ class Drone:
         depth (bool): Indicates if depth sensing is enabled.
         spawn_box (np.ndarray): Defines the volume in which the drone can be respawned.
         spawn_angles (np.ndarray): Specifies the range of angles for the drone's initial orientation.
-        bullet_velocity (float): The velocity at which the drone's bullets are fired.
-        drone_to_drone (dict, optional): Stores information about distances and angles to other drones.
-        drone_to_target (dict, optional): Stores information about distances and angles to targets.
+        bullet_velocity (float): The velocity at which the drone's bullets are shot.
+        _drone_to_drone_distance (np.ndarray): The distance between this drone and other drones.
+        _drone_to_target_distance (np.ndarray): The distance between this drone and targets.
+        _drone_to_drone_sin_theta (np.ndarray): The sine of the angle between this drone and other drones.
+        _drone_to_target_sin_theta (np.ndarray): The sine of the angle between this drone and targets.
+        _drone_to_drone_cos_theta (np.ndarray): The cosine of the angle between this drone and other drones.
+        _drone_to_target_cos_theta (np.ndarray): The cosine of the angle between this drone and targets_.
 
     Methods:
         __init__: Initializes the Drone class with model, data, agent identifier, and other configurations.
@@ -232,67 +246,131 @@ class Drone:
         reset_default_flags: Resets the default status flags of the drone.
         reset_flags: Abstract method to reset custom flags or statuses of the drone.
     """
-    def __init__(self, model: MjModel, data: MjData, agent_id: AgentID, renderer: Renderer, camera_type: str,
-                 depth: bool, spawn_box: np.ndarray, spawn_angles: np.ndarray, bullet_velocity: float,
-                 drone_to_drone: dict[AgentID, dict[str, float]] = None,
-                 drone_to_target: dict[AgentID, dict[str, float]] = None, **kwargs):
-        """
-        Initializes a Drone instance with the given parameters and pre-computes necessary identifiers.
-        
-        Args:
-            model (MjModel): The MuJoCo model associated with the simulation.
-            data (MjData): The data structure containing the current state of the simulation.
-            agent_id (AgentID): Unique identifier for the drone within the simulation.
-            renderer (Renderer): Renderer used for visualizing the simulation.
-            camera_type (str): Type of camera used ('stereo', 'mono', or None).
-            depth (bool): Flag indicating if depth sensing is enabled.
-            spawn_box (np.ndarray): 3D box defining the spawn area for the drone.
-            spawn_angles (np.ndarray): Range of angles for the drone's initial orientation.
-            bullet_velocity (float): Velocity at which the drone's bullets are fired.
-            drone_to_drone (dict): (Optional) Dictionary storing information about other drones.
-            drone_to_target (dict): (Optional) Dictionary storing information about targets.
-        """
+    
+    def __init__(
+            self,
+            model: MjModel,
+            data: MjData,
+            agent_id: AgentID,
+            renderer: Renderer,
+            camera_type: str,
+            depth: bool,
+            spawn_box: np.ndarray,
+            spawn_angles: np.ndarray,
+            bullet_velocity: float,
+            drone_to_drone_distance: Optional[np.ndarray] = None,
+            drone_to_target_distance: Optional[np.ndarray] = None,
+            drone_to_drone_sin_theta: Optional[np.ndarray] = None,
+            drone_to_target_sin_theta: Optional[np.ndarray] = None,
+            drone_to_drone_cos_theta: Optional[np.ndarray] = None,
+            drone_to_target_cos_theta: Optional[np.ndarray] = None,
+            drone_to_drone_cartesian: Optional[np.ndarray] = None,
+            drone_to_target_cartesian: Optional[np.ndarray] = None,
+            n_phi: int = 36,
+            n_theta: int = 36,
+            ray_max_distance: float = 50,
+            enable_ray: bool = False,
+            max_world_diagonal: float = 100,
+            **kwargs
+    ):
+        # region Basic Initialization
         self.model = model
         self.data = data
         self.agent_id = agent_id
         self.renderer = renderer
-        self.camera_type = camera_type  # "stereo" or "mono" or None
+        self.camera_type = camera_type
         self.depth = depth
         self.spawn_box = spawn_box
         self.spawn_angles = spawn_angles
-        self.drone_to_drone = drone_to_drone
-        self.drone_to_target = drone_to_target
+        self.bullet_velocity = bullet_velocity
+        self.max_world_diagonal = max_world_diagonal
+        # endregion
         
-        # Pre-compute IDs
+        # region Drone-to-Drone and Drone-to-Target Distances and Angles
+        self._drone_to_drone_distance = drone_to_drone_distance
+        self._drone_to_target_distance = drone_to_target_distance
+        self._drone_to_drone_sin_theta = drone_to_drone_sin_theta
+        self._drone_to_target_sin_theta = drone_to_target_sin_theta
+        self._drone_to_drone_cos_theta = drone_to_drone_cos_theta
+        self._drone_to_target_cos_theta = drone_to_target_cos_theta
+        self._drone_to_drone_cartesian = drone_to_drone_cartesian
+        self._drone_to_target_cartesian = drone_to_target_cartesian
+        # endregion
+        
+        # region Ray Unit Vectors and Related Attributes
+        self.enable_ray = enable_ray
+        if enable_ray:
+            self.initial_ray_unit_vectors = np.array(
+                [
+                    [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+                    for theta in np.linspace(0, np.pi, n_theta) for phi in np.linspace(0, 2 * np.pi, n_phi)
+                ]
+            )
+            self.flattened_ray_unit_vectors = self.initial_ray_unit_vectors.copy().flatten()
+            self.distances = np.zeros(n_phi * n_theta, dtype=np.float64)
+            self.intersecting_geoms = np.zeros(n_phi * n_theta, dtype=np.int32)
+            self.ray_max_distance = ray_max_distance
+            self.num_rays = n_phi * n_theta
+        # endregion
+        
+        # region Pre-Compute IDs
         drone_name = f"drone_{agent_id}"
         self.body_id = mj_name2id(model, mjtObj.mjOBJ_BODY, drone_name)
         self.geom_ids = [mj_name2id(model, mjtObj.mjOBJ_GEOM, f"{drone_name}_collision_{i}") for i in range(2)]
         self.free_joint_id = mj_name2id(model, mjtObj.mjOBJ_JOINT, f"{drone_name}_free_joint")
+        self.free_joint_qpos_address = self.model.jnt_qposadr[self.free_joint_id]
+        self.free_joint_qvel_address = self.model.jnt_dofadr[self.free_joint_id]
+        # endregion
         
-        # Pre-compute camera IDs based on camera type
+        # region Pre-Compute Camera IDs Based on Camera Type
         if self.camera_type == "mono":
             self.mono_camera_id = mj_name2id(model, mjtObj.mjOBJ_CAMERA, drone_name)
         elif self.camera_type == "stereo":
             self.left_camera_id = mj_name2id(model, mjtObj.mjOBJ_CAMERA, f"{drone_name}_left")
             self.right_camera_id = mj_name2id(model, mjtObj.mjOBJ_CAMERA, f"{drone_name}_right")
+        # endregion
         
-        # Sensor IDs
-        self.accelerometer_id = mj_name2id(model, mjtObj.mjOBJ_SENSOR, f"{drone_name}_accelerometer")
-        self.gyro_id = mj_name2id(model, mjtObj.mjOBJ_SENSOR, f"{drone_name}_gyro")
+        # region Sensor IDs
+        self.accel_id = mj_name2id(model, mjtObj.mjOBJ_SENSOR, f"accelerometer_{agent_id}")
+        self.gyro_id = mj_name2id(model, mjtObj.mjOBJ_SENSOR, f"gyro_{agent_id}")
+        # endregion
         
-        self.initial_pos = self.data.body_xpos[self.body_id].copy()
+        # region Initialize Other Attributes
+        self.initial_pos = self.data.xpos[self.body_id].copy()
         self.bullet = Bullet(agent_id, model, data, agent_id, bullet_velocity, self, **kwargs)
-        
+        self.front_left_actuator_id = mj_name2id(model, mjtObj.mjOBJ_ACTUATOR, f"front_left_{self.agent_id}")
+        self.front_right_actuator_id = mj_name2id(model, mjtObj.mjOBJ_ACTUATOR, f"front_right_{self.agent_id}")
+        self.back_left_actuator_id = mj_name2id(model, mjtObj.mjOBJ_ACTUATOR, f"back_left_{self.agent_id}")
+        self.back_right_actuator_id = mj_name2id(model, mjtObj.mjOBJ_ACTUATOR, f"back_right_{self.agent_id}")
+        self.actuator_ids = [
+            self.front_left_actuator_id,
+            self.front_right_actuator_id,
+            self.back_left_actuator_id,
+            self.back_right_actuator_id
+        ]
         self._image_1: np.ndarray = None
         self._image_2: np.ndarray = None
         self.init_images()
+        # endregion
         
+        # region Flags for Various Conditions
         self.hit_floor = False
         self.got_shot = False
-        self.hit_target = False
+        self.shot_target = False
         self.shot_drone = False
         self.out_of_bounds = False
         self.crash_target = False
+        # endregion
+    
+    @property
+    def ray_distances(self) -> np.ndarray:
+        """
+        Returns the distances of the rays cast from the drone.
+
+        Returns:
+            np.ndarray: An array of distances of the rays cast from the drone.
+        """
+        return self.distances / self.ray_max_distance
     
     def init_images(self):
         """
@@ -304,8 +382,7 @@ class Drone:
         if self.camera_type == "stereo":
             self._image_2 = np.zeros(dimensions)
     
-    @property
-    def images(self):
+    def images(self, render: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
         """
         Returns the current image or images captured by the drone's camera(s).
 
@@ -313,14 +390,16 @@ class Drone:
             np.ndarray: An array or arrays representing the captured image(s).
         """
         if self.camera_type == "mono":
-            self.renderer.update_scene(self.data, camera=self.mono_camera_id)
-            self.renderer.render(out=self._image_1)
+            if render:
+                self.renderer.update_scene(self.data, camera=self.mono_camera_id)
+                self.renderer.render(out=self._image_1)
             return self._image_1
         elif self.camera_type == "stereo":
-            self.renderer.update_scene(self.data, camera=self.left_camera_id)
-            self.renderer.render(out=self._image_1)
-            self.renderer.update_scene(self.data, camera=self.right_camera_id)
-            self.renderer.render(out=self._image_2)
+            if render:
+                self.renderer.update_scene(self.data, camera=self.left_camera_id)
+                self.renderer.render(out=self._image_1)
+                self.renderer.update_scene(self.data, camera=self.right_camera_id)
+                self.renderer.render(out=self._image_2)
             return self._image_1, self._image_2
     
     def respawn(self):
@@ -329,9 +408,9 @@ class Drone:
         """
         pos = np.random.uniform(*self.spawn_box) + self.initial_pos[:3]
         quat = quaternion.from_euler_angles(np.random.uniform(*self.spawn_angles))
-        self.data.qpos[self.free_joint_id * 7: self.free_joint_id * 7 + 7] = np.concatenate(
+        self.data.qpos[self.free_joint_qpos_address: self.free_joint_qpos_address + 7] = np.concatenate(
             [pos, quaternion.as_float_array(quat)])
-        self.data.qvel[self.free_joint_id * 6: self.free_joint_id * 6 + 6].fill(0)
+        self.data.qvel[self.free_joint_qvel_address: self.free_joint_qvel_address + 6].fill(0)
     
     def reset(self):
         """
@@ -348,7 +427,7 @@ class Drone:
         """
         self.hit_floor = False
         self.got_shot = False
-        self.hit_target = False
+        self.shot_target = False
         self.shot_drone = False
         self.out_of_bounds = False
         self.crash_target = False
@@ -365,13 +444,13 @@ class Drone:
         raise NotImplementedError
     
     @abstractmethod
-    def observe(self, render) -> EnvObsType:
+    def observe(self, render: bool) -> EnvObsType:
         """
         Retrieves observations from the drone's sensors. This method should be implemented by subclasses to
         provide sensor data or other relevant observations from the environment.
 
         Args:
-            render (bool): Flag indicating whether to render the observation.
+            render (bool): Flag indicating whether to render the observation if applicable.
 
         Returns:
             EnvObsType: The observed data.
@@ -443,16 +522,35 @@ class Drone:
             bool: True if the episode is truncated, False otherwise.
         """
         raise NotImplementedError
-        
+    
     @abstractmethod
     def reset_flags(self):
         """
         Abstract method to reset custom flags or statuses of the drone.
         """
         raise NotImplementedError
+    
+    def update_rays(self):
+        if self.enable_ray:
+            self.flattened_ray_unit_vectors[:] = R.from_quat(
+                self.data.qpos[self.free_joint_qpos_address + 3: self.free_joint_qpos_address + 7]  # [x, y, z, w]
+            ).apply(self.initial_ray_unit_vectors).flatten()  # [x, y, z] -> [x1, y1, z1, x2, y2, z2, ...]
+            mj_multiRay(
+                m=self.model,
+                d=self.data,
+                pnt=self.data.xpos[self.body_id],
+                vec=self.flattened_ray_unit_vectors,
+                geomgroup=None,
+                flg_static=1,
+                bodyexclude=self.body_id,
+                geomid=self.intersecting_geoms,
+                dist=self.distances,
+                nray=self.num_rays,
+                cutoff=mjMAXVAL
+            )
 
 
-class BaseEnvironment(MultiAgentEnv):
+class MultiAgentBaseDroneEnvironment(Env, MultiAgentEnv):
     """
     A multi-agent environment for simulating drones and targets in MuJoCo.
 
@@ -482,10 +580,12 @@ class BaseEnvironment(MultiAgentEnv):
         done: Determines whether the episode has completed for each agent.
         truncated: Checks if the episode is truncated for each agent.
     """
-    def __init__(self, num_agents: int, DroneClass: Type[Drone], num_targets: int, map_bounds: np.ndarray,
-                 respawn_box: np.ndarray, spawn_angles: np.ndarray, camera_type: str = None, depth: bool = False,
-                 calculate_drone_to_drone: bool = False, calculate_drone_to_target: bool = False,
-                 world_bounds: np.ndarray = None, **kwargs):
+    
+    def __init__(self, num_agents: int, DroneClass: Type[Drone], num_targets: int, world_bounds: np.ndarray,
+                 respawn_box: np.ndarray, spawn_angles: np.ndarray, camera_type: str, depth: bool,
+                 calculate_drone_to_drone: bool, calculate_drone_to_target: bool, render_mode: str,
+                 n_phi: int = 36, n_theta: int = 36, ray_max_distance: float = 50,
+                 enable_ray: bool = False, **kwargs):
         """
         Initializes the multi-agent environment with the given configuration.
 
@@ -493,14 +593,13 @@ class BaseEnvironment(MultiAgentEnv):
             num_agents (int): The number of drone agents in the environment.
             DroneClass (Type[Drone]): The drone class to be used for creating drone instances.
             num_targets (int): The number of targets in the environment.
-            map_bounds (np.ndarray): The boundary limits of the map.
+            world_bounds (np.ndarray): The boundaries within which drones can operate.
             respawn_box (np.ndarray): The box within which drones can be respawned.
             spawn_angles (np.ndarray): The range of angles for drones' initial orientations.
             camera_type (str): The type of camera used by drones ('stereo', 'mono', or None).
             depth (bool): Flag indicating whether depth perception is enabled.
             calculate_drone_to_drone (bool): Flag indicating whether to calculate drone-to-drone relational data.
             calculate_drone_to_target (bool): Flag indicating whether to calculate drone-to-target relational data.
-            world_bounds (np.ndarray): The boundaries within which drones can operate.
             **kwargs: Additional keyword arguments for drone initialization.
         """
         assert camera_type in ["stereo", "mono", None], "Invalid camera type, must be one of 'stereo', 'mono' or None"
@@ -508,21 +607,29 @@ class BaseEnvironment(MultiAgentEnv):
         mj_model = get_model(
             num_agents=num_agents,
             num_targets=num_targets,
-            map_bounds=map_bounds,
+            map_bounds=world_bounds,
             light_height=kwargs.get("light_height", 5),
             spacing=kwargs.get("spacing", 2),
             drone_height=kwargs.get("drone_height", 0.5),
             target_dimensions_range=kwargs.get("target_dimensions_range",
                                                np.array([[0.05, 0.05, 0.05], [0.2, 0.2, 0.2]])),
         )
+        mj_model.opt.timestep = kwargs.get("timestep", 0.01)
         
         self.model: MjModel = mj_model
         self.data: MjData = MjData(self.model)
+        self.render_mode = render_mode
+        assert render_mode in ["lidar", "mujoco", None], \
+            "Invalid render mode, must be one of 'lidar', 'drone_pov', 'free_pov', or None"
         self.renderer: Renderer = Renderer(self.model, kwargs.get("height", 480), kwargs.get("width", 640))
+        self.handler: viewer.Handle = (
+            viewer.launch_passive(self.model, self.data)) if render_mode in ["lidar", "drone_pov"] else None
         self.depth = depth
         self.calculate_drone_to_drone = calculate_drone_to_drone
         self.calculate_drone_to_target = calculate_drone_to_target
         self.world_bounds = world_bounds if world_bounds is not None else np.array([[-25, -25, 0], [25, 25, 10]])
+        self.max_distance = np.linalg.norm(self.world_bounds[1] - self.world_bounds[0])
+        self.noise = kwargs.get("noise", 0.01)
         
         self.camera_type = camera_type
         self.num_agents = num_agents
@@ -531,12 +638,17 @@ class BaseEnvironment(MultiAgentEnv):
         # endregion
         
         # region Drone and Target Initialization
-        self._drone_to_drone = {drone_id: {other_drone_id: {"distance": 0, "theta": 0}
-                                           for other_drone_id in self.agent_ids if other_drone_id != drone_id}
-                                for drone_id in self.agent_ids} if self.calculate_drone_to_drone else None
-        self._drone_to_target = {drone_id: {target_id: {"distance": 0, "theta": 0}
-                                            for target_id in self.target_ids}
-                                 for drone_id in self.agent_ids} if self.calculate_drone_to_target else None
+        
+        self.drone_to_drone_distance = np.zeros((num_agents, num_agents)) if calculate_drone_to_drone else None
+        self.drone_to_drone_sin_theta = np.zeros((num_agents, num_agents)) if calculate_drone_to_drone else None
+        self.drone_to_drone_cos_theta = np.zeros((num_agents, num_agents)) if calculate_drone_to_drone else None
+        self.drone_to_drone_cartesian = np.zeros((num_agents, num_agents, 3)) if calculate_drone_to_drone else None
+        
+        self.drone_to_target_distance = np.zeros((num_agents, num_targets)) if calculate_drone_to_target else None
+        self.drone_to_target_sin_theta = np.zeros((num_agents, num_targets)) if calculate_drone_to_target else None
+        self.drone_to_target_cos_theta = np.zeros((num_agents, num_targets)) if calculate_drone_to_target else None
+        self.drone_to_target_cartesian = np.zeros((num_agents, num_targets, 3)) if calculate_drone_to_target else None
+        
         self.drones = {agent_id: DroneClass(
             model=self.model,
             data=self.data,
@@ -546,27 +658,44 @@ class BaseEnvironment(MultiAgentEnv):
             spawn_box=respawn_box,
             spawn_angles=spawn_angles,
             bullet_velocity=kwargs.get("bullet_velocity", 10),
-            drone_to_drone=self._drone_to_drone[agent_id],
-            drone_to_target=self._drone_to_target[agent_id],
+            drone_to_drone_distance=self.drone_to_drone_distance[agent_id] if calculate_drone_to_drone else None,
+            drone_to_target_distance=self.drone_to_target_distance[agent_id] if calculate_drone_to_target else None,
+            drone_to_drone_sin_theta=self.drone_to_drone_sin_theta[agent_id] if calculate_drone_to_drone else None,
+            drone_to_target_sin_theta=self.drone_to_target_sin_theta[agent_id] if calculate_drone_to_target else None,
+            drone_to_drone_cos_theta=self.drone_to_drone_cos_theta[agent_id] if calculate_drone_to_drone else None,
+            drone_to_target_cos_theta=self.drone_to_target_cos_theta[agent_id] if calculate_drone_to_target else None,
+            drone_to_drone_cartesian=self.drone_to_drone_cartesian[agent_id] if calculate_drone_to_drone else None,
+            drone_to_target_cartesian=self.drone_to_target_cartesian[agent_id] if calculate_drone_to_target else None,
+            n_phi=n_phi,
+            n_theta=n_theta,
+            ray_max_distance=ray_max_distance,
+            enable_ray=enable_ray,
+            max_world_diagonal=np.linalg.norm(self.world_bounds[1] - self.world_bounds[0]),
             **kwargs
         ) for agent_id in self.agent_ids}
         self.targets = {target_id: Target(
             model=self.model,
             data=self.data,
             target_id=target_id,
-            spawn_box=map_bounds,
+            spawn_box=np.array([
+                [self.world_bounds[0][0], self.world_bounds[0][1], 0.1],
+                [self.world_bounds[1][0], self.world_bounds[1][1], 10]
+            ]),
             spawn_angles=np.array([[0, 0, 0], [2 * np.pi, 2 * np.pi, 2 * np.pi]]),
             target_color=kwargs.get("target_color", np.array([0, 1, 0, 1]))
         ) for target_id in self.target_ids}
+        self.drone_body_ids = [drone.body_id for drone in self.drones.values()]
         # endregion
         
         MultiAgentEnv.__init__(self)
         
         # region Space Initialization
         self.observation_space: SpaceDict[AgentID, Space[ObsType]] = SpaceDict({
-            agent_id: drone.observation_space for agent_id, drone in self.drones.items()})
+            agent_id: drone.observation_space for agent_id, drone in self.drones.items()
+        })
         self.action_space: SpaceDict[AgentID, Space[ObsType]] = SpaceDict({
-            agent_id: drone.action_space for agent_id, drone in self.drones.items()})
+            agent_id: drone.action_space for agent_id, drone in self.drones.items()
+        })
         # endregion
         
         # region Pre-computation for collision checks
@@ -574,7 +703,7 @@ class BaseEnvironment(MultiAgentEnv):
             drone.bullet.geom_id: drone for drone in self.drones.values()
         }
         self._drone_geom_ids_to_drones = {
-            geom_model.id: drone for drone in self.drones.values() for geom_model in drone.geom_ids
+            geom_id: drone for drone in self.drones.values() for geom_id in drone.geom_ids
         }
         self._target_geom_ids_to_targets = {
             target.geom_id: target for target in self.targets.values()
@@ -660,7 +789,7 @@ class BaseEnvironment(MultiAgentEnv):
                 drones_hit_floor.add(drone_2.agent_id)
             # endregion
         # endregion
-
+        
         # region Set Drone Flags and Reset Targets and Bullets
         for agent_id in drones_shooting_drones:
             self.drones[agent_id].shot_drone = True
@@ -671,7 +800,7 @@ class BaseEnvironment(MultiAgentEnv):
         for agent_id in drones_crash_target:
             self.drones[agent_id].crash_target = True
         for agent_id in drones_hit_target:
-            self.drones[agent_id].hit_target = True
+            self.drones[agent_id].shot_target = True
         for target_id in targets_hit:
             self.targets[target_id].reset()
         for agent_id in bullet_floor_contacts:
@@ -684,14 +813,14 @@ class BaseEnvironment(MultiAgentEnv):
         """
         for agent_id, action in action_dict.items():
             self.drones[agent_id].act(action)
-            
+    
     def reset_agents(self) -> None:
         """
         Respawns all drones at new locations within the spawn box.
         """
         for drone in self.drones.values():
             drone.respawn()
-            
+    
     def reset_agent_flags(self) -> None:
         """
         Resets status flags for all drones in the environment.
@@ -701,34 +830,62 @@ class BaseEnvironment(MultiAgentEnv):
     
     def update_drone_relations(self) -> None:
         """
-        Updates the relational data between drones and between drones and targets.
+        Updates the relational data between drones and between drones and targets. This function computes
+        the normalized distances, angles (and their sine and cosine values), and Cartesian coordinates
+        for each drone-drone and drone-target pair. The computed values are normalized with respect to
+        the maximum distance in the environment and stored in corresponding class attributes.
+
+        The function handles two main types of relationships:
+        1. Drone-to-Drone: Computes the relative positions and orientations between each pair of drones.
+        2. Drone-to-Target: Computes the relative positions and orientations between each drone and target.
+
+        The calculations are as follows:
+
+        For Drone-to-Drone:
+        - Distance: \(d_{ij} = \frac{\| \mathbf{p}_i - \mathbf{p}_j \|}{\text{max\_distance}}\)
+        - Angle (Theta): \(\theta_{ij} = \text{atan2}(y_{ij}, x_{ij})\)
+        - Sine of Theta: \(\sin(\theta_{ij})\)
+        - Cosine of Theta: \(\cos(\theta_{ij})\)
+        - Cartesian Coordinates: \(\Delta \mathbf{p}_{ij} = \frac{\mathbf{p}_i - \mathbf{p}_j}{\text{max\_distance}} + \mathcal{N}(0, \text{noise})\)
+
+        For Drone-to-Target:
+        - Distance: \(d_{ik} = \frac{\| \mathbf{p}_i - \mathbf{t}_k \|}{\text{max\_distance}}\)
+        - Angle (Theta): \(\theta_{ik} = \text{atan2}(y_{ik}, x_{ik})\)
+        - Sine of Theta: \(\sin(\theta_{ik})\)
+        - Cosine of Theta: \(\cos(\theta_{ik})\)
+        - Cartesian Coordinates: \(\Delta \mathbf{p}_{ik} = \frac{\mathbf{p}_i - \mathbf{t}_k}{\text{max\_distance}} + \mathcal{N}(0, \text{noise})\)
+
+        where:
+        - \( \mathbf{p}_i \) and \( \mathbf{p}_j \) are the positions of drones i and j, respectively.
+        - \( \mathbf{t}_k \) is the position of target k.
+        - \(\mathcal{N}(0, \text{noise})\) represents Gaussian noise with a mean of 0 and a standard deviation defined by the `noise` attribute.
+        - \(\text{max\_distance}\) is the maximum possible distance in the environment, used for normalization.
+
+        Note:
+        - The distances and Cartesian coordinates are normalized by the maximum possible distance in the environment to ensure they are within a [0, 1] range.
+        - The function updates class attributes that store the computed relational data, which can then be used for downstream tasks like observation generation or reward calculation.
         """
-        if self.calculate_drone_to_drone or self.calculate_drone_to_target:
-            drone_positions = np.array(
-                [self.data.body_xpos[self.drones[agent_id].body_id] for agent_id in self.agent_ids])
+        drone_positions = np.array([self.data.xpos[self.drones[agent_id].body_id] for agent_id in self.agent_ids])
+        if self.calculate_drone_to_drone:
             deltas = drone_positions[:, np.newaxis, :] - drone_positions[np.newaxis, :, :]
-            distances = np.linalg.norm(deltas, axis=2)
-            np.fill_diagonal(distances, np.inf)
-            thetas = np.arctan2(deltas[..., 0], deltas[..., 1])
-            
-            if self.calculate_drone_to_drone:
-                for i, agent_id in enumerate(self.agent_ids):
-                    for j, other_agent_id in enumerate(self.agent_ids):
-                        if agent_id != other_agent_id:
-                            self._drone_to_drone[agent_id][other_agent_id]["distance"] = distances[i, j]
-                            self._drone_to_drone[agent_id][other_agent_id]["theta"] = thetas[i, j]
-            
-            if self.calculate_drone_to_target:
-                target_positions = np.array(
-                    [self.data.geom_xpos[self.targets[target_id].geom_id] for target_id in self.target_ids])
-                delta_targets = drone_positions[:, np.newaxis, :] - target_positions[np.newaxis, :, :]
-                distances_targets = np.linalg.norm(delta_targets, axis=2)
-                thetas_targets = np.arctan2(delta_targets[..., 0], delta_targets[..., 1])
-                
-                for i, agent_id in enumerate(self.agent_ids):
-                    for j, target_id in enumerate(self.target_ids):
-                        self._drone_to_target[agent_id][target_id]["distance"] = distances_targets[i, j]
-                        self._drone_to_target[agent_id][target_id]["theta"] = thetas_targets[i, j]
+            self.drone_to_drone_distance[:, :] = np.linalg.norm(deltas, axis=2) / self.max_distance
+            np.fill_diagonal(self.drone_to_drone_distance, 0)  # Avoid self-distance
+            thetas = np.arctan2(deltas[..., 1], deltas[..., 0])
+            self.drone_to_drone_sin_theta[:, :] = np.sin(thetas)
+            self.drone_to_drone_cos_theta[:, :] = np.cos(thetas)
+            self.drone_to_drone_cartesian[:, :, :] = (deltas / self.max_distance +
+                                                      np.random.normal(0, self.noise, deltas.shape))
+        
+        if self.calculate_drone_to_target:
+            target_positions = np.array(
+                [self.data.geom_xpos[self.targets[target_id].geom_id] for target_id in self.target_ids])
+            delta_targets = drone_positions[:, np.newaxis, :] - target_positions[np.newaxis, :, :]
+            self.drone_to_target_distance[:, :] = np.linalg.norm(delta_targets, axis=2) / self.max_distance
+            thetas_targets = np.arctan2(delta_targets[..., 1], delta_targets[..., 0])
+            self.drone_to_target_sin_theta[:, :] = np.sin(thetas_targets)
+            self.drone_to_target_cos_theta[:, :] = np.cos(thetas_targets)
+            self.drone_to_target_cartesian[:, :, :] = (delta_targets / self.max_distance +
+                                                       np.random.normal(0, self.noise, delta_targets.shape))
     
     def update_out_of_bounds(self) -> None:
         """
@@ -744,6 +901,14 @@ class BaseEnvironment(MultiAgentEnv):
         out_of_bounds = np.logical_or(np.logical_or(out_of_bounds_x, out_of_bounds_y), out_of_bounds_z)
         for idx, drone in enumerate(self.drones.values()):
             drone.out_of_bounds = out_of_bounds[idx]
+    
+    def update_drones(self) -> None:
+        """
+        Updates the state of the drones based on the current environment.
+        """
+        if self.physics_step_index % self.render_every == 0:
+            for drone in self.drones.values():
+                drone.update_rays()
     
     @property
     def step_results(self) -> Tuple[MultiEnvDict, MultiEnvDict, MultiEnvDict, MultiEnvDict, MultiEnvDict]:
@@ -767,7 +932,40 @@ class BaseEnvironment(MultiAgentEnv):
         mj_step(self.model, self.data, self.frame_skip)
         self.update_drone_relations()
         self.collisions()
+        self.update_drones()
         return self.step_results
+    
+    def render(self, mode: str) -> None:
+        """
+        Renders the current state of the environment.
+        """
+        assert mode in ["lidar", "mujoco", None], \
+            "Invalid rendering mode, must be one of 'lidar', 'drone_follow', 'free_cam' or None"
+        
+        if self.handler is not None:
+            self.handler.sync()
+    
+    def reset(
+            self,
+            *,
+            seed: Optional[int] = None,
+            options: Optional[dict] = None,
+    ) -> Tuple[MultiAgentDict, MultiAgentDict]:
+        """
+        Resets the environment to its initial state.
+        """
+        mj_resetData(self.model, self.data)
+        self.reset_agents()
+        self.reset_agent_flags()
+        self.update_drone_relations()
+        return self.observation(render=True), self.reward
+    
+    def close(self):
+        """
+        Closes the environment and releases resources.
+        """
+        if self.handler is not None:
+            self.handler.close()
     
     def observation(self, render: bool = False) -> MultiAgentDict:
         """
