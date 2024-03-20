@@ -22,6 +22,7 @@ import numpy as np
 import os
 
 from mujoco import MjModel
+import gym_drone
 
 
 def read_template_files() -> tuple:
@@ -31,7 +32,7 @@ def read_template_files() -> tuple:
     Returns:
         tuple: Containing the content of scene.xml, drone.xml, and target.xml respectively.
     """
-    base_path = "../assets"
+    base_path = f"{os.path.dirname(gym_drone.__file__)}/assets"
     with open(f"{base_path}/scene.xml") as f:
         scene_xml = f.read()
     with open(f"{base_path}/drone.xml") as f:
@@ -189,10 +190,9 @@ def get_model(num_agents: int, num_targets: int, light_height: float, spacing: f
         target_dimensions_range (np.ndarray): 2x3 array with lower and upper bounds for target dimensions.
         map_bounds (np.ndarray): 2x3 array with lower and upper bounds for target positions.
     """
-    os.chdir(os.path.dirname(__file__))
     scene_xml, drone_xml, target_xml = read_template_files()
     
-    save_dir = "../assets/generated"
+    save_dir = f"{os.path.dirname(gym_drone.__file__)}/assets/generated"
     
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -206,5 +206,4 @@ def get_model(num_agents: int, num_targets: int, light_height: float, spacing: f
     
     create_scene_xml(scene_xml, num_agents, num_targets, light_height, map_bounds, save_dir)
     create_agent_and_target_xml(drone_xml, target_xml, drone_positions, target_positions, target_dimensions, save_dir)
-    
     return MjModel.from_xml_path(f"{save_dir}/scene.xml")

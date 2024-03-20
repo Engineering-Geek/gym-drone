@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Set, Tuple, Type, Optional
+from typing import Set, Tuple, Type, Optional, Union
 
 import numpy as np
 from gymnasium import Space
@@ -50,8 +50,8 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
     
     def __init__(self, num_agents: int, DroneClass: Type[BaseDrone], num_targets: int, spacing: float,
                  world_bounds: np.ndarray, respawn_box: np.ndarray, spawn_angles: np.ndarray,
-                 calculate_drone_to_drone: bool, calculate_drone_to_target: bool, render_mode: str,
-                 n_phi: int = None, n_theta: int = None, ray_max_distance: float = None,
+                 calculate_drone_to_drone: bool, calculate_drone_to_target: bool, render_mode: Union[str, None],
+                 n_phi: int = None, n_theta: int = None, ray_max_distance: float = None, time_limit: int = 60,
                  **kwargs):
         """
         Initializes the multi-agent drone environment with the specified configuration.
@@ -66,6 +66,10 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         :param calculate_drone_to_drone: A boolean indicating whether relational data between drones should be calculated.
         :param calculate_drone_to_target: A boolean indicating whether relational data between drones and targets should be calculated.
         :param render_mode: A string specifying the rendering mode for the environment. Choose from 'human', None.
+        :param n_phi: The number of vertical rays to use for the LiDAR sensor.
+        :param n_theta: The number of horizontal rays to use for the LiDAR sensor.
+        :param ray_max_distance: The maximum distance at which the LiDAR sensor can detect objects.
+        :param time_limit: The maximum number of seconds for each episode.
 
         :keyword light_height: (float) The height at which the environment's light source is placed.
         :keyword drone_height: (float) The height at which drones are initialized or respawned.
@@ -102,9 +106,10 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         self.world_bounds = world_bounds if world_bounds is not None else np.array([[-25, -25, 0], [25, 25, 10]])
         self.max_distance = np.linalg.norm(self.world_bounds[1] - self.world_bounds[0])
         self.noise = kwargs.get("noise", 0.01)
+        self.time_limit = time_limit
         
         self.num_agents = num_agents
-        self.agent_ids: Set[AgentID] = set(range(num_agents))
+        self._agent_ids: Set[AgentID] = set(range(num_agents))
         self.target_ids = set(range(num_targets))
         # endregion
         
@@ -146,7 +151,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             drone_to_drone_cartesian=self.drone_to_drone_cartesian[agent_id] if calculate_drone_to_drone else None,
             drone_to_target_cartesian=self.drone_to_target_cartesian[agent_id] if calculate_drone_to_target else None,
             max_world_diagonal=np.linalg.norm(self.world_bounds[1] - self.world_bounds[0]),
-        ) for agent_id in self.agent_ids}
+        ) for agent_id in self._agent_ids}
         self.targets = {target_id: BaseTarget(
             model=self.model,
             data=self.data,
@@ -209,6 +214,8 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         self.action_space: SpaceDict[AgentID, Space[ObsType]] = SpaceDict({
             agent_id: drone.action_space for agent_id, drone in self.drones.items()
         })
+        self._action_space_in_preferred_format = True
+        self._observation_space_in_preferred_format = True
         # endregion
     
     def init_rays(self, n_theta: int = 16, n_phi: int = 8, max_distance: float = 10.0) -> None:
@@ -354,7 +361,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             - This function updates class attributes that store the computed relational data, which can then be used for downstream tasks like observation generation or reward calculation.
         """
         # Update drone positions
-        for i, agent_id in enumerate(self.agent_ids):
+        for i, agent_id in enumerate(self._agent_ids):
             self.drone_positions[i, :] = self.data.xpos[self.drones[agent_id].body_id]
         
         # Calculate drone-to-drone relationships if enabled
@@ -438,7 +445,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
                 drone.respawn()
             if self.model.body_contype[drone.bullet.body_id] == 0:
                 drone.bullet.reset()
-            drone.custom_update()
+            drone.update()
     
     @property
     def step_results(self) -> Tuple[MultiEnvDict, MultiEnvDict, MultiEnvDict, MultiEnvDict, MultiEnvDict]:
@@ -482,7 +489,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         self.reset_agents()
         self.reset_agent_flags()
         self.update_drone_relations()
-        return self.observation, self.reward
+        return self.observation, self.log_info
     
     def close(self):
         """
@@ -496,32 +503,36 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         """
         Retrieves observations for each drone in the environment.
         """
-        return {agent_id: self.drones[agent_id].observation for agent_id in self.agent_ids}
+        return {agent_id: self.drones[agent_id].observation for agent_id in self._agent_ids}
     
     @property
     def reward(self) -> MultiAgentDict:
         """
         Computes the reward for each drone based on the current state.
         """
-        return {agent_id: self.drones[agent_id].reward for agent_id in self.agent_ids}
+        return {agent_id: self.drones[agent_id].reward for agent_id in self._agent_ids}
     
     @property
     def log_info(self) -> MultiAgentDict:
         """
         Provides additional information about the environment's state.
         """
-        return {agent_id: self.drones[agent_id].log_info for agent_id in self.agent_ids}
+        return {agent_id: self.drones[agent_id].log_info for agent_id in self._agent_ids}
     
     @property
     def done(self) -> MultiAgentDict:
         """
         Determines whether the episode has completed for each agent.
         """
-        return {agent_id: self.drones[agent_id].done for agent_id in self.agent_ids}
+        done = {agent_id: self.drones[agent_id].done for agent_id in self._agent_ids}
+        done.update({"__all__": False})     # This is a multi-agent environment and not a single-agent one
+        return done
     
     @property
     def truncated(self) -> MultiAgentDict:
         """
         Checks if the episode is truncated for each agent.
         """
-        return {agent_id: self.drones[agent_id].truncated for agent_id in self.agent_ids}
+        trunc = {agent_id: self.drones[agent_id].truncated for agent_id in self._agent_ids}
+        trunc.update({"__all__": self.data.time > float(self.time_limit)})    # This is a multi-agent environment and not a single-agent one
+        return trunc

@@ -89,7 +89,7 @@
 
   <!-- Sensor definitions for the drone-->
   <sensor>
-    <accelerometer name="accelerometer_{{index}}" site="drone_{{index}}_sensor_site" noise="0.1"/>
-    <gyro name="gyro_{{index}}" site="drone_{{index}}_sensor_site" noise="0.1"/>
+    <accelerometer name="accelerometer_{{index}}" site="drone_{{index}}_sensor_site" noise="0.1" cutoff="10"/>
+    <gyro name="gyro_{{index}}" site="drone_{{index}}_sensor_site" noise="0.1" cutoff="10"/>
   </sensor>
 </mujoco>

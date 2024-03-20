@@ -19,38 +19,34 @@ class LidarBaseDrone(BaseDrone, ABC):
     @property
     def observation_space(self) -> Space[EnvObsType]:
         sensor_space = Box(
-            low=-1, high=1, shape=(6,), dtype=np.float32
+            low=-1, high=1, shape=(3,), dtype=np.float64
         )
         position_space = Box(
-            low=-1, high=1, shape=(3,), dtype=np.float32
+            low=-1, high=1, shape=(3,), dtype=np.float64
         )
         lidar_space = Box(
-            low=0, high=1, shape=(len(self.distances),), dtype=np.float32
+            low=0, high=1, shape=(len(self.distances),), dtype=np.float64
         )
         return TupleSpace((sensor_space, position_space, lidar_space))
     
+    @property
     def observation(self) -> EnvObsType:
-        if not self.lidar_data:
+        if isinstance(self.lidar_data, type(None)):
             self.lidar_data = np.zeros(len(self.distances))
-            
-        if self.model.sensor_cutoff[self.gyro_id] and self.model.sensor_cutoff[self.accel_id]:
-            np.clip(
-                self.data.sensordata[self.gyro_id: self.gyro_id + 3] / self.model.sensor_cutoff[self.gyro_id],
-                a_min=-1, a_max=1, out=self.return_gyro_data
-            )
-            np.clip(
-                self.data.sensordata[self.accel_id: self.accel_id + 3] / self.model.sensor_cutoff[self.accel_id],
-                a_min=-1, a_max=1, out=self.return_accel_data
-            )
-            np.clip(
-                self.data.xpos[self.body_id] / self.max_world_diagonal,
-                a_min=-1, a_max=1, out=self.return_position
-            )
-            np.clip(
-                self.distances,
-                a_min=0, a_max=1, out=self.lidar_data
-            )
-        return self.return_accel_data, self.return_gyro_data, self.return_position, self.lidar_data
+        
+        np.clip(
+            self.data.sensordata[self.gyro_id: self.gyro_id + 3] / self.model.sensor_cutoff[self.gyro_id],
+            a_min=-1, a_max=1, out=self.return_gyro_data
+        )
+        np.clip(
+            self.data.sensordata[self.accel_id: self.accel_id + 3] / self.model.sensor_cutoff[self.accel_id],
+            a_min=-1, a_max=1, out=self.return_accel_data
+        )
+        np.clip(
+            self.distances,
+            a_min=0, a_max=1, out=self.lidar_data
+        )
+        return self.return_accel_data.copy(), self.return_gyro_data.copy(), self.lidar_data.copy()
     
     @property
     def action_space(self) -> Space:
@@ -67,7 +63,7 @@ class LidarBaseDrone(BaseDrone, ABC):
 class ShootingLidarDrone(LidarBaseDrone, ABC):
     def __init__(self, **kwargs):
         super(ShootingLidarDrone, self).__init__(**kwargs)
-        
+    
     @property
     def action_space(self) -> Space:
         sample_motor_id = self.actuator_ids[0]
@@ -82,5 +78,3 @@ class ShootingLidarDrone(LidarBaseDrone, ABC):
         if action[1]:
             self.bullet.shoot()
             self.just_shot = True
-        
-        

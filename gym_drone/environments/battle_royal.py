@@ -1,4 +1,6 @@
 import numpy as np
+import ray.rllib.env.env_context
+from ray.rllib.utils.typing import EnvConfigDict
 
 from gym_drone.drones.lidar_drones import ShootingLidarDrone
 from gym_drone.environments.core.base_environment import MultiAgentBaseDroneEnvironment
@@ -66,13 +68,21 @@ class LidarDroneBattleRoyal(ShootingLidarDrone):
 
 
 class LidarBattleRoyal(MultiAgentBaseDroneEnvironment):
-    def __init__(self, num_agents: int = 5, spacing: float = 3.0,
-                 world_bounds: np.ndarray = None, respawn_box: np.ndarray = None, spawn_angles: np.ndarray = None,
-                 n_phi: int = 16, n_theta: int = 16, ray_max_distance: float = 10, render_mode: str = None,
-                 **kwargs):
+    def __init__(self, config: EnvConfigDict):
+        
+        num_agents = config.get("num_agents", 5)
+        spacing = config.get("spacing", 3)
+        world_bounds = config.get("world_bounds", None)
+        respawn_box = config.get("respawn_box", None)
+        spawn_angles = config.get("spawn_angles", None)
+        render_mode = config.get("render_mode", None)
+        n_phi = config.get("n_phi", 16)
+        n_theta = config.get("n_theta", 16)
+        ray_max_distance = config.get("ray_max_distance", 10)
+        kwargs = config.get("kwargs", {})
         
         if world_bounds is None:
-            world_bounds = np.array([[-5, -5, 0.5], [5, 5, 5]])
+            world_bounds = np.array([[-5, -5, -0.1], [5, 5, 5]])
         if respawn_box is None:
             respawn_box = np.array([[-5, -5, 0.5], [5, 5, 5]])
         if spawn_angles is None:
