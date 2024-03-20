@@ -29,9 +29,9 @@
     <body name="drone_{{index}}" pos="{{x}} {{y}} .25">
       <!-- Free joint for models body to allow free movement in the environment -->
       <freejoint name="drone_{{index}}_free_joint"/>
-      <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.1"/>
+      <inertial pos="0 0 0" mass="0.1"/>
       <site name="drone_{{index}}_sensor_site" pos="0 0 0"/>
-      <geom name="drone_{{index}}_mesh" type="mesh" rgba="0.615686 0.811765 0.929412 1" mesh="frame_{{index}}" contype="0" conaffinity="0"/>
+      <geom name="drone_{{index}}_mesh" type="mesh" rgba="0.615686 0.811765 0.929412 1" mesh="frame_{{index}}" contype="0" conaffinity="0" quat="0 0 0 1"/>
       <!-- Main collision box for the drone -->
       <geom name="drone_{{index}}_collision_1" type="box" size="0.1 0.1 0.01" rgba="0 0 0 0" contype="1" conaffinity="1"/>
       <!-- Additional collision box for the drone -->
@@ -65,16 +65,16 @@
         <geom name="back_left_prop_{{index}}" pos="0 0 -0.005" type="mesh" rgba="0.615686 0.811765 0.929412 1" mesh="ccwprop_{{index}}"/>
       </body>
 
-      <site name="bullet_spawn_position_{{index}}" pos="0 0.125 -0.015" size="0.01" rgba="0 0 0 0"/>
+      <site name="bullet_spawn_position_{{index}}" pos="0 0.08 -0.015" size="0.01" rgba="0 0 0 .2"/>
 
       <!-- Cameras (2 stereo, 1 normal) -->
-      <camera name="camera{{index}}" pos="0 0.1 0" zaxis="0 -1 0" fovy="60" mode="fixed"/>
-      <camera name="camera{{index}}_left" pos="-.025 0.1 0" zaxis="0 -1 0" fovy="60" mode="fixed"/>
-      <camera name="camera{{index}}_right" pos=".025 0.1 0" zaxis="0 -1 0" fovy="60" mode="fixed"/>
+      <camera name="camera{{index}}" pos="0 0.1 0" xyaxes="1 0 0 0 0 1" fovy="60" mode="fixed"/>
+      <camera name="camera{{index}}_left" pos="-.025 0.1 0" xyaxes="1 0 0 0 0 1" fovy="60" mode="fixed"/>
+      <camera name="camera{{index}}_right" pos=".025 0.1 0" xyaxes="1 0 0 0 0 1" fovy="60" mode="fixed"/>
     </body>
     <body name="bullet_{{index}}" pos="0 0 0">
       <freejoint name="bullet_{{index}}"/>
-      <geom name="bullet_{{index}}" type="sphere" size="0.05" rgba="0.5 0.5 0.5 0.5" contype="0" conaffinity="0"/>
+      <geom name="bullet_{{index}}" type="sphere" size="0.01" rgba="0.5 0.5 0.5 0.5" contype="0" conaffinity="0"/>
     </body>
   </worldbody>
 

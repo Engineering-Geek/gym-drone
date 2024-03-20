@@ -1,4 +1,4 @@
-from gym_drone.core import MultiAgentBaseDroneEnvironment
+from gym_drone.environments.core.base_environment import MultiAgentBaseDroneEnvironment
 import time
 from tqdm import tqdm
 

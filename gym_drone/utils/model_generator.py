@@ -11,8 +11,7 @@ Functions
 - generate_target_positions : Generate x, y, z positions for the targets randomly placed within the map bounds.
 - generate_target_dimensions : Generate dimensions for the targets based on the specified range.
 - create_scene_xml : Create the XML for the scene and write it to a file.
-- create_agent_and_target_xml : Create and save the XML files for drones and targets with generated positions and
-dimensions.
+- create_agent_and_target_xml : Create and save the XML files for drones and targets with generated positions and dimensions.
 - model : Main function to generate and save the scene, drones, and targets XML configuration.
 
 This module is designed to be used in conjunction with MuJoCo simulations, particularly those involving multiple drones
@@ -52,7 +51,7 @@ def generate_drone_positions(num_agents: int, spacing: float, drone_height: floa
         drone_height (float): Height at which drones are placed.
 
     Returns:
-        np.ndarray: Drone positions array.
+        np.ndarray: BaseDrone positions array.
     """
     indices = np.arange(num_agents)
     radians = 2 * np.pi / num_agents
@@ -74,7 +73,7 @@ def generate_target_positions(num_targets: int, map_bounds: np.ndarray) -> np.nd
         map_bounds (np.ndarray): 2x3 array with lower and upper bounds for target positions.
 
     Returns:
-        np.ndarray: Target positions array.
+        np.ndarray: BaseTarget positions array.
     """
     return np.random.uniform(map_bounds[0], map_bounds[1], size=(num_targets, 3))
 
@@ -88,12 +87,13 @@ def generate_target_dimensions(num_targets: int, target_dimensions_range: np.nda
         target_dimensions_range (np.ndarray): 2x3 array with lower and upper bounds for target dimensions.
 
     Returns:
-        np.ndarray: Target dimensions array.
+        np.ndarray: BaseTarget dimensions array.
     """
     return np.random.uniform(target_dimensions_range[0], target_dimensions_range[1], size=(num_targets, 3))
 
 
-def create_scene_xml(scene_xml: str, num_agents: int, num_targets: int, light_height: float, save_dir: str):
+def create_scene_xml(scene_xml: str, num_agents: int, num_targets: int, light_height: float, map_bounds: np.ndarray,
+                     save_dir: str):
     """
     Create the XML for the scene and write it to a file.
 
@@ -102,6 +102,7 @@ def create_scene_xml(scene_xml: str, num_agents: int, num_targets: int, light_he
         num_agents (int): Number of agents (drones).
         num_targets (int): Number of targets.
         light_height (float): Height of the light source in the scene.
+        map_bounds (np.ndarray): World bounds for placing the fence.
         save_dir (str): Directory to save the generated scene XML.
     """
     scene_xml = scene_xml.replace("{{light_height}}", str(light_height))
@@ -112,6 +113,28 @@ def create_scene_xml(scene_xml: str, num_agents: int, num_targets: int, light_he
     for i in range(num_targets):
         files += f'\t<include file="target{i}.xml"/>\n'
     scene_xml = scene_xml.replace("{{files}}", files)
+    
+    # Define the fence XML based on the world bounds
+    xmin, ymin, _ = map_bounds[0]
+    xmax, ymax, _ = map_bounds[1]
+    
+    # Define four walls to form a fence around the perimeter
+    fence_xml = ""
+    wall_thickness = 0.1  # thickness of the wall
+    wall_height = 1.0  # height of the wall
+    fence_color = "1 0 0 1"  # RGBA color for the fence (red)
+    
+    # Left wall
+    fence_xml += f'<geom type="box" size="{wall_thickness / 2} {(ymax - ymin) / 2} {wall_height / 2}" pos="{xmin - wall_thickness / 2} {(ymin + ymax) / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    # Right wall
+    fence_xml += f'<geom type="box" size="{wall_thickness / 2} {(ymax - ymin) / 2} {wall_height / 2}" pos="{xmax + wall_thickness / 2} {(ymin + ymax) / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    # Bottom wall
+    fence_xml += f'<geom type="box" size="{(xmax - xmin) / 2} {wall_thickness / 2} {wall_height / 2}" pos="{(xmin + xmax) / 2} {ymin - wall_thickness / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    # Top wall
+    fence_xml += f'<geom type="box" size="{(xmax - xmin) / 2} {wall_thickness / 2} {wall_height / 2}" pos="{(xmin + xmax) / 2} {ymax + wall_thickness / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    
+    # Replace the fence placeholder
+    scene_xml = scene_xml.replace("{{fence}}", fence_xml)
     
     with open(f"{save_dir}/scene.xml", "w") as f:
         f.write(scene_xml)
@@ -181,7 +204,7 @@ def get_model(num_agents: int, num_targets: int, light_height: float, spacing: f
     target_positions = generate_target_positions(num_targets, map_bounds)
     target_dimensions = generate_target_dimensions(num_targets, target_dimensions_range)
     
-    create_scene_xml(scene_xml, num_agents, num_targets, light_height, save_dir)
+    create_scene_xml(scene_xml, num_agents, num_targets, light_height, map_bounds, save_dir)
     create_agent_and_target_xml(drone_xml, target_xml, drone_positions, target_positions, target_dimensions, save_dir)
     
     return MjModel.from_xml_path(f"{save_dir}/scene.xml")

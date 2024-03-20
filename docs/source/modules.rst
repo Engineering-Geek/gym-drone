@@ -1,7 +1,7 @@
-gym-drone
+gym_drone
 =========
 
 .. toctree::
    :maxdepth: 4
 
-   gym-drone
+   gym_drone
