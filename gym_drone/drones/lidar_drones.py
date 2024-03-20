@@ -74,13 +74,13 @@ class ShootingLidarDrone(LidarBaseDrone, ABC):
         motor_space = Box(
             low=0, high=self.model.actuator_ctrlrange[sample_motor_id, 1], shape=(4,), dtype=np.float32
         )
-        bullet_space = Discrete(1)
+        bullet_space = Discrete(2)
         return TupleSpace((motor_space, bullet_space))
     
     def act(self, action: np.ndarray) -> None:
         self.data.ctrl[self.actuator_ids] = action[0]
         if action[1]:
-            self.model.shoot(self.model, self.data, self.model.opt.timestep)
+            self.bullet.shoot()
             self.just_shot = True
         
         

@@ -65,7 +65,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         :param spawn_angles: A numpy array specifying the range of angles for the initial orientation of the drones.
         :param calculate_drone_to_drone: A boolean indicating whether relational data between drones should be calculated.
         :param calculate_drone_to_target: A boolean indicating whether relational data between drones and targets should be calculated.
-        :param render_mode: A string specifying the rendering mode for the environment. Choose from 'free', 'drone_pov', or None.
+        :param render_mode: A string specifying the rendering mode for the environment. Choose from 'human', None.
 
         :keyword light_height: (float) The height at which the environment's light source is placed.
         :keyword drone_height: (float) The height at which drones are initialized or respawned.
@@ -93,10 +93,10 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         self.model: MjModel = mj_model
         self.data: MjData = MjData(self.model)
         self.render_mode = render_mode
-        assert render_mode in ["free", "drone_pov", None], \
-            "Invalid render mode. Choose from 'free', 'drone_pov', or None."
+        assert render_mode in ["human", None], \
+            "Invalid render mode. Choose from 'human', or None."
         self.handler: viewer.Handle = (
-            viewer.launch_passive(self.model, self.data)) if render_mode in ["free", "drone_pov"] else None
+            viewer.launch_passive(self.model, self.data)) if render_mode in ["human"] else None
         self.calculate_drone_to_drone = calculate_drone_to_drone
         self.calculate_drone_to_target = calculate_drone_to_target
         self.world_bounds = world_bounds if world_bounds is not None else np.array([[-25, -25, 0], [25, 25, 10]])
@@ -134,7 +134,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             agent_id=agent_id,
             spawn_box=respawn_box,
             spawn_angles=spawn_angles,
-            bullet_velocity=kwargs.get("bullet_velocity", 3.0),
+            bullet_velocity=kwargs.get("bullet_velocity", 5.0),
             drone_to_drone_distance=self.drone_to_drone_distance[agent_id] if calculate_drone_to_drone else None,
             drone_to_target_distance=self.drone_to_target_distance[agent_id] if calculate_drone_to_target else None,
             drone_to_drone_sin_theta=self.drone_to_drone_sin_theta[agent_id] if calculate_drone_to_drone else None,
@@ -175,9 +175,19 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         }
         # endregion
         
-        # region Floor Geometry
+        # region Floor and Wall Geometries
         self.floor_geom = self.model.geom("floor")
+        self.left_wall_geom = self.model.geom("left_wall")
+        self.right_wall_geom = self.model.geom("right_wall")
+        self.bottom_wall_geom = self.model.geom("bottom_wall")
+        self.top_wall_geom = self.model.geom("top_wall")
         self.floor_geom_id = self.floor_geom.id
+        self.left_wall_geom_id = self.left_wall_geom.id
+        self.right_wall_geom_id = self.right_wall_geom.id
+        self.bottom_wall_geom_id = self.bottom_wall_geom.id
+        self.top_wall_geom_id = self.top_wall_geom.id
+        self.boundary_geom_ids = {self.floor_geom_id, self.left_wall_geom_id, self.right_wall_geom_id,
+                                  self.bottom_wall_geom_id, self.top_wall_geom_id}
         # endregion
         
         # region Pre-computation for rendering
@@ -252,10 +262,10 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             # endregion
             
             # region Drone to Floor Collision
-            if drone_1 and geom_2_id == self.floor_geom_id:
+            if drone_1 and geom_2_id in self.boundary_geom_ids:
                 drone_1.hit_floor = True
                 continue
-            if drone_2 and geom_1_id == self.floor_geom_id:
+            if drone_2 and geom_1_id in self.boundary_geom_ids:
                 drone_2.hit_floor = True
                 continue
             # endregion
@@ -355,15 +365,13 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             # Compute distances and normalize
             distances = np.linalg.norm(self.drone_to_drone_deltas, axis=2)
             np.divide(distances, self.max_distance, out=self.drone_to_drone_distance)
-            np.fill_diagonal(self.drone_to_drone_distance, 0)  # Avoid self-distance
+            np.fill_diagonal(self.drone_to_drone_distance, np.nan)  # Avoid self-distance
             
             # Calculate angles and add noise
-            noise = np.random.normal(0, self.noise, self.drone_to_drone_theta.shape)
-            np.arctan2(self.drone_to_drone_deltas[..., 0], self.drone_to_drone_deltas[..., 1],
+            np.arctan2(self.drone_to_drone_deltas[..., 1], self.drone_to_drone_deltas[..., 0],
                        out=self.drone_to_drone_theta)
-            self.drone_to_drone_theta -= np.pi / 2  # Rotate frame so that 0 points towards y-axis
-            self.drone_to_drone_theta += noise  # Add noise
-            self.drone_to_drone_theta = (self.drone_to_drone_theta + np.pi) % (2 * np.pi) - np.pi  # Normalize angles
+            self.drone_to_drone_theta += np.random.normal(0, self.noise, self.drone_to_drone_theta.shape)
+            np.fill_diagonal(self.drone_to_drone_theta, np.nan)  # Avoid self-angle
             
             # Calculate sine and cosine for the angles
             np.sin(self.drone_to_drone_theta, out=self.drone_to_drone_sin_theta)
@@ -388,12 +396,9 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             np.divide(distances, self.max_distance, out=self.drone_to_target_distance)
             
             # Calculate angles and add noise
-            noise = np.random.normal(0, self.noise, self.drone_to_target_theta.shape)
-            np.arctan2(self.drone_to_target_delta[..., 0], self.drone_to_target_delta[..., 1],
+            np.arctan2(self.drone_to_target_delta[..., 1], self.drone_to_target_delta[..., 0],
                        out=self.drone_to_target_theta)
-            self.drone_to_target_theta -= np.pi / 2  # Rotate frame so that 0 points towards y-axis
-            self.drone_to_target_theta += noise  # Add noise and normalize
-            self.drone_to_target_theta = (self.drone_to_target_theta + np.pi) % (2 * np.pi) - np.pi
+            self.drone_to_target_theta += np.random.normal(0, self.noise, self.drone_to_target_theta.shape)
             
             # Calculate sine and cosine for the angles
             np.sin(self.drone_to_target_theta, out=self.drone_to_target_sin_theta)

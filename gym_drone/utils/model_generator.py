@@ -125,13 +125,13 @@ def create_scene_xml(scene_xml: str, num_agents: int, num_targets: int, light_he
     fence_color = "1 0 0 1"  # RGBA color for the fence (red)
     
     # Left wall
-    fence_xml += f'<geom type="box" size="{wall_thickness / 2} {(ymax - ymin) / 2} {wall_height / 2}" pos="{xmin - wall_thickness / 2} {(ymin + ymax) / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    fence_xml += f'<geom name="left_wall" type="box" size="{wall_thickness / 2} {(ymax - ymin) / 2} {wall_height / 2}" pos="{xmin - wall_thickness / 2} {(ymin + ymax) / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
     # Right wall
-    fence_xml += f'<geom type="box" size="{wall_thickness / 2} {(ymax - ymin) / 2} {wall_height / 2}" pos="{xmax + wall_thickness / 2} {(ymin + ymax) / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    fence_xml += f'<geom name="right_wall" type="box" size="{wall_thickness / 2} {(ymax - ymin) / 2} {wall_height / 2}" pos="{xmax + wall_thickness / 2} {(ymin + ymax) / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
     # Bottom wall
-    fence_xml += f'<geom type="box" size="{(xmax - xmin) / 2} {wall_thickness / 2} {wall_height / 2}" pos="{(xmin + xmax) / 2} {ymin - wall_thickness / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    fence_xml += f'<geom name="bottom_wall" type="box" size="{(xmax - xmin) / 2} {wall_thickness / 2} {wall_height / 2}" pos="{(xmin + xmax) / 2} {ymin - wall_thickness / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
     # Top wall
-    fence_xml += f'<geom type="box" size="{(xmax - xmin) / 2} {wall_thickness / 2} {wall_height / 2}" pos="{(xmin + xmax) / 2} {ymax + wall_thickness / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
+    fence_xml += f'<geom name="top_wall" type="box" size="{(xmax - xmin) / 2} {wall_thickness / 2} {wall_height / 2}" pos="{(xmin + xmax) / 2} {ymax + wall_thickness / 2} {wall_height / 2}" rgba="{fence_color}"/>\n'
     
     # Replace the fence placeholder
     scene_xml = scene_xml.replace("{{fence}}", fence_xml)

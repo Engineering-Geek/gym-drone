@@ -64,15 +64,18 @@ class BaseBullet:
         """
         Simulates the shooting action of the bullet.
         """
-        # Only proceed if the bullet is not currently active (contype is 0)
-        if not self.model.body_contype[self.body_id]:
+        quat = self.parent.data.xquat[self.parent.body_id]
+        
+        # Check if the quaternion is valid (non-degenerate and normalized)
+        is_non_degenerate = not np.all(quat == 0)
+        is_normalized = np.isclose(np.linalg.norm(quat), 1.0)
+        
+        if not self.model.body_contype[self.body_id] and is_non_degenerate and is_normalized:
             # Set the bullet's position to the spawn site's position
             self.data.qpos[self.jnt_qp_adr: self.jnt_qp_adr + 3] = self.data.site_xpos[self.spawn_site_id]
             
             # Calculate the bullet's velocity
-            # Here, we're assuming the bullet is fired in the direction the drone is facing.
-            # You may need to adjust this based on your drone's orientation and desired firing direction.
-            direction = R.from_quat(self.parent.data.xquat[self.parent.body_id]).apply([0, -1, 0])
+            direction = R.from_quat(quat).apply([1, 0, 0])
             velocity = direction * self.bullet_velocity
             
             # Set the bullet's velocity
