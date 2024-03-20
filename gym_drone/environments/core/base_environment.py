@@ -46,6 +46,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         and characteristics of the environment, such as custom collision handling, observation space definition,
         and reward computation.
     """
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     
     def __init__(self, num_agents: int, DroneClass: Type[BaseDrone], num_targets: int, spacing: float,
                  world_bounds: np.ndarray, respawn_box: np.ndarray, spawn_angles: np.ndarray,
@@ -125,7 +126,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
         self.drone_to_target_theta = np.zeros((num_agents, num_targets)) if calculate_drone_to_target else None
         self.drone_to_target_cartesian = np.zeros((num_agents, num_targets, 3)) if calculate_drone_to_target else None
         # endregion
-
+        
         # region BaseDrone and BaseTarget Initialization
         self.drones = {agent_id: DroneClass(
             model=self.model,
@@ -199,7 +200,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             agent_id: drone.action_space for agent_id, drone in self.drones.items()
         })
         # endregion
-        
+    
     def init_rays(self, n_theta: int = 16, n_phi: int = 8, max_distance: float = 10.0) -> None:
         """
         Initializes the rays for each drone.
@@ -210,7 +211,7 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
                 n_phi=n_phi,
                 ray_max_distance=max_distance
             )
-            
+    
     def init_cameras(self, camera_type: str, renderer: Renderer, depth: bool = False) -> None:
         """
         Initializes the cameras for each drone.
@@ -358,7 +359,8 @@ class MultiAgentBaseDroneEnvironment(MultiAgentEnv, Env):
             
             # Calculate angles and add noise
             noise = np.random.normal(0, self.noise, self.drone_to_drone_theta.shape)
-            np.arctan2(self.drone_to_drone_deltas[..., 0], self.drone_to_drone_deltas[..., 1], out=self.drone_to_drone_theta)
+            np.arctan2(self.drone_to_drone_deltas[..., 0], self.drone_to_drone_deltas[..., 1],
+                       out=self.drone_to_drone_theta)
             self.drone_to_drone_theta -= np.pi / 2  # Rotate frame so that 0 points towards y-axis
             self.drone_to_drone_theta += noise  # Add noise
             self.drone_to_drone_theta = (self.drone_to_drone_theta + np.pi) % (2 * np.pi) - np.pi  # Normalize angles

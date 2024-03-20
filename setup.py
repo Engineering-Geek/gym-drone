@@ -8,13 +8,11 @@ setup(
     description='A Gymnasium environment for multi-agent drone simulation with guns and targets.',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',  # If your README is in Markdown
-    url='https://github.com/yourusername/gym-drone',  # Project home page or repository URL
+    url='https://github.com/Engineering-Geek/gym-drone',  # Project home page or repository URL
     license='MIT',  # Or whatever license you choose
     packages=find_packages(),  # Automatically find and include all packages
     install_requires=[
         'gymnasium',
-        'numpy',
-        'rllib'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -23,9 +21,4 @@ setup(
     ],
     python_requires='>=3.11',  # Specify the Python versions your project supports
     include_package_data=True,  # Include non-code files specified in MANIFEST.in
-    entry_points={  # Optional: if you have scripts or executables
-        'console_scripts': [
-            'gym-drone=gym_drone:main',  # Replace 'main' with the appropriate entry point
-        ],
-    },
 )
